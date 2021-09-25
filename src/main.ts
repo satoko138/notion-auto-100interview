@@ -1,5 +1,5 @@
 import { Client } from '@notionhq/client';
-import { RelationProperty, RichTextPropertyValue, RollupPropertyValue, TitlePropertyValue } from '@notionhq/client/build/src/api-types';
+import { FilesPropertyValue, RelationProperty, RichTextPropertyValue, RollupPropertyValue, TitlePropertyValue } from '@notionhq/client/build/src/api-types';
 require('dotenv').config();
 
 const notion = new Client({
@@ -13,6 +13,12 @@ type RelationPropertyValue = {
         id: string;
     }[];
 }
+type URLPropertyValue = {
+    id: string;
+    type: 'url';
+    url: string;
+}
+
 // タイトルから抽出する情報
 type TitleInfo = {
     name: string;
@@ -122,7 +128,7 @@ async function getPageInfo(memberMap: {[name: string]: MemberInfo}): Promise<Upd
                         name,
                     });
                 }
-            })
+            });
 
             if (info.interviewee !== undefined || info.interviewer.length > 0) {
                 result.push(info);
@@ -267,6 +273,72 @@ async function updatePage(updateInfo: UpdateInfo[]) {
 
 }
 
+/**
+ * 動画URL情報の取得
+ * @returns 
+ */
+async function getYoutubeInfos(): Promise<{id: string; url: string;}[]> {
+    let hasNext = true;
+    let nextCursor;
+
+    const pageInfos = [] as {
+        id: string;
+        url: string;
+    }[];
+    while(hasNext) {
+        const myPage = await notion.databases.query({
+            database_id: process.env.INTERVIEW_DATABASE_ID,
+            start_cursor: nextCursor,
+        });
+
+        myPage.results.forEach((page) => {
+            const titleCol = page.properties['名前'] as TitlePropertyValue;
+
+            const thumbCol = (page.properties['ユーチューブURL'] as unknown) as URLPropertyValue;
+            const url = thumbCol.url;
+            pageInfos.push({
+                id: page.id,
+                url,
+            });
+        })
+        nextCursor = myPage.next_cursor;
+        hasNext = nextCursor !== null;
+    }
+    return pageInfos;
+}
+
+async function insertYoutube(pageInfos: {id: string; url: string;}[]) {
+    pageInfos.forEach(async(info) => {
+        // 動画ブロックがあるか確認
+        const blocks = await notion.blocks.children.list({
+            block_id: info.id,
+        });
+        const hasVideo = blocks.results.some((block) => {
+            // @ts-ignore
+            return block.type === 'video';
+        });
+
+        if (hasVideo) {
+            return;
+        }
+
+        // 動画を追加
+        await notion.blocks.children.append({
+            block_id: info.id,
+            children: [{
+                // @ts-ignore
+                type: 'video',
+                video: {
+                    type: 'external',
+                    external: {
+                        url: info.url,
+                    },
+                },
+            }]
+        });
+    });
+}
+
 async function main() {
     console.log('*** loadFellowList ***');
     const memberMap = await loadFellowList();
@@ -278,4 +350,13 @@ async function main() {
     console.log('*** updatePage ***');
     await updatePage(newUpdateInfo);
 }
-main();
+
+// Youtube動画を埋め込み
+async function setupYoutubeMain() {
+    const infos = await getYoutubeInfos();
+    console.log('*** insertYoutube ***');
+    await insertYoutube(infos);
+
+}
+// main();
+setupYoutubeMain();
