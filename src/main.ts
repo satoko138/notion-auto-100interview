@@ -145,19 +145,44 @@ async function loadFellowList(): Promise<{[name: string]: MemberInfo}> {
     return infoMap;
 }
 
-// async function updatePage(updateInfo: UpdateInfo[]) {
-    
-//     await notion.pages.update({
-//         page_id: 
+async function updatePage(updateInfo: UpdateInfo[]) {
+    Promise.all(updateInfo.map(async(info) => {
+        console.log('info', info);
+        if (info.interviewee?.id !== undefined) {
+            console.log('update');
+            return await notion.pages.update({
+                page_id: info.pageId,
+                properties: {
+                    // @ts-ignore
+                    'Property': {
+                        'rich_text': [{
+                            type: 'text',
+                            text: {
+                                content: 'Test2',
+                            },
+                        }],
+                    },
+                    'インタビュイー': {
+                        // @ts-ignore
+                        'relation': [{
+                            id: info.interviewee.id,
+                        }],
+                    },
+                },
+                archived: false,
+            });
+        } else {
+            return Promise.resolve();
+        }
+    }));
 
-//     })
-
-// }
+}
 
 async function main() {
     const memberMap = await loadFellowList();
     // console.log(memberMap);
     const updateInfo = await getPageInfo(memberMap);
-    console.log(updateInfo);
+    // console.log(updateInfo);
+    await updatePage(updateInfo);
 }
 main();
