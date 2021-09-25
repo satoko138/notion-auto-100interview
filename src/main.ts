@@ -1,5 +1,5 @@
 import { Client } from '@notionhq/client';
-import { FilesPropertyValue, RelationProperty, RichTextPropertyValue, RollupPropertyValue, TitlePropertyValue } from '@notionhq/client/build/src/api-types';
+import { RichTextPropertyValue, TitlePropertyValue } from '@notionhq/client/build/src/api-types';
 require('dotenv').config();
 
 const notion = new Client({
@@ -292,8 +292,6 @@ async function getYoutubeInfos(): Promise<{id: string; url: string;}[]> {
         });
 
         myPage.results.forEach((page) => {
-            const titleCol = page.properties['名前'] as TitlePropertyValue;
-
             const thumbCol = (page.properties['ユーチューブURL'] as unknown) as URLPropertyValue;
             const url = thumbCol.url;
             pageInfos.push({
