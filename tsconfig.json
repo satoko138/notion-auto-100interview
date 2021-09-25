@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+      "sourceMap": true,
+      "target": "es2015", // TSはECMAScript 5に変換
+      "module": "commonjs",
+      "allowSyntheticDefaultImports": true,
+      "allowJs": true,
+      "baseUrl": "src",
+      "paths": {
+        "*": ["node_modules/*"]
+      },
+      "moduleResolution": "node",
+    },
+    "include": ["src/**/*"]
+  }
