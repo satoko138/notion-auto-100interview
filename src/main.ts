@@ -49,7 +49,7 @@ function extractInfo(title: string): TitleInfo {
 }
 type UpdateInfo = {
     pageId: string; // 更新対象のページID
-    interviewee: {
+    interviewee?: {
         id?: string | undefined;  // インタビュイーページID。undefinedの場合、ページを作成する。
         name: string;
     } | undefined;
@@ -64,125 +64,218 @@ type UpdateInfo = {
  * @returns 更新する必要のある情報
  */
 async function getPageInfo(memberMap: {[name: string]: MemberInfo}): Promise<UpdateInfo[]> {
-    const myPage = await notion.databases.query({
-        database_id: process.env.INTERVIEW_DATABASE_ID,
-    });
     const result = [] as UpdateInfo[];
-    myPage.results.forEach((page) => {
-        const titleCol = page.properties['タイトル'] as RichTextPropertyValue;
-        const title = titleCol.rich_text[0].plain_text;
 
-        // 情報抽出
-        const titleInfo = extractInfo(title);
+    let hasNext = true;
+    let nextCursor;
 
-        // リンク先ページ取得
-        const info = {
-            pageId: page.id,
-            interviewer: [],
-        } as UpdateInfo;
+    while(hasNext) {
+        const myPage = await notion.databases.query({
+            database_id: process.env.INTERVIEW_DATABASE_ID,
+            start_cursor: nextCursor,
+        });
+        myPage.results.forEach((page) => {
+            const titleCol = page.properties['タイトル'] as RichTextPropertyValue;
+            const title = titleCol.rich_text[0].plain_text;
 
-        // インタビュイー
-        const interviewee = titleInfo.name;
-        if (memberMap[interviewee] !== undefined) {
-            const intervieweeCol = (page.properties['インタビュイー'] as unknown) as RelationPropertyValue;
-            if (intervieweeCol.relation.indexOf({id: memberMap[interviewee].id}) === -1) {
-                // インタビュイーが設定されていない場合
+            // 情報抽出
+            const titleInfo = extractInfo(title);
+
+            // リンク先ページ取得
+            const info = {
+                pageId: page.id,
+                interviewer: [],
+            } as UpdateInfo;
+
+            // インタビュイー
+            const interviewee = titleInfo.name;
+            if (memberMap[interviewee] !== undefined) {
+                const intervieweeCol = (page.properties['インタビュイー'] as unknown) as RelationPropertyValue;
+                if (intervieweeCol.relation.findIndex(r => r.id === memberMap[interviewee].id) === -1) {
+                    // インタビュイーが設定されていない場合
+                    info.interviewee = {
+                        id: memberMap[interviewee].id,
+                        name: memberMap[interviewee].name,
+                    }
+                }
+            } else {
+                //  メンバーページ作成
                 info.interviewee = {
-                    id: memberMap[interviewee].id,
-                    name: memberMap[interviewee].name,
+                    name: interviewee,
                 }
             }
-        } else {
-            //  メンバーページ作成
-            info.interviewee = {
-                name: interviewee,
-            }
-        }
 
-        // インタビュアー
-        titleInfo.interviewer.forEach((name) => {
-            const interviewerCol = (page.properties['インタビュアー'] as unknown) as RelationPropertyValue;
-            if (memberMap[name] !== undefined) {
-                if (interviewerCol.relation.indexOf({id: memberMap[name].id}) === -1) {
-                    // インタビュアーが設定されていない場合
+            // インタビュアー
+            titleInfo.interviewer.forEach((name) => {
+                const interviewerCol = (page.properties['インタビュアー'] as unknown) as RelationPropertyValue;
+                if (memberMap[name] !== undefined) {
+                    if (interviewerCol.relation.findIndex(r => r.id === memberMap[name].id) === -1) {
+                        // インタビュアーが設定されていない場合
+                        info.interviewer.push({
+                            id: memberMap[name].id,
+                            name,
+                        });
+                    }
+                } else {
+                    // メンバーページ作成
                     info.interviewer.push({
-                        id: memberMap[name].id,
                         name,
                     });
                 }
-            } else {
-                // メンバーページ作成
-                info.interviewer.push({
-                    name,
-                });
-            }
-        })
+            })
 
-        if (info.interviewee !== undefined || info.interviewer.length > 0) {
-            result.push(info);
-        }
-    })
+            if (info.interviewee !== undefined || info.interviewer.length > 0) {
+                result.push(info);
+            }
+
+            nextCursor = myPage.next_cursor;
+            hasNext = nextCursor !== null;
+        });
+    }
     return result;
 
 }
 
 // メンバー情報取得
 async function loadFellowList(): Promise<{[name: string]: MemberInfo}> {
-    const myPage = await notion.databases.query({
-        database_id: process.env.MEMBER_DATABASE_ID,
-    });
     const infoMap = {} as {[name: string]: MemberInfo};
-    myPage.results.forEach((page) => {
-        const titleCol = page.properties['Name'] as TitlePropertyValue;
-        const title = titleCol.title[0].plain_text;
-        // 空白除去
-        const key = title.replace(/( |　)/g, '');
-        infoMap[key] = {
-            id: page.id,
-            name: title,
-        };
-    });
+    let hasNext = true;
+    let nextCursor;
+
+    while(hasNext) {
+        const myPage = await notion.databases.query({
+            database_id: process.env.MEMBER_DATABASE_ID,
+            start_cursor: nextCursor,
+        });
+        myPage.results.forEach((page) => {
+            const titleCol = page.properties['Name'] as TitlePropertyValue;
+            if (titleCol.title.length === 0) {
+                return;
+            }
+            const title = titleCol.title[0].plain_text;
+            // 空白除去
+            const key = title.replace(/( |　)/g, '');
+            infoMap[key] = {
+                id: page.id,
+                name: title,
+            };
+        });
+        nextCursor = myPage.next_cursor;
+        hasNext = nextCursor !== null;
+    }
     return infoMap;
+}
+
+/**
+ * 必要なメンバーのページを作成する
+ * @param updateInfo 
+ */
+async function createMemberPage(updateInfo: UpdateInfo[]): Promise<UpdateInfo[]> {
+    // 作成する必要のある名前を抽出
+    const nameList = [] as string[];
+    updateInfo.forEach((info) => {
+        if (info.interviewee !== undefined && info.interviewee.id === undefined) {
+            if (nameList.indexOf(info.interviewee.name) === -1) {
+                nameList.push(info.interviewee.name);
+            }
+        }
+        info.interviewer.forEach((ivr) => {
+            if (ivr.id === undefined) {
+                if (nameList.indexOf(ivr.name) === -1) {
+                    nameList.push(ivr.name);
+                }
+            }
+        })
+    });
+
+    if (nameList.length === 0) {
+        return updateInfo;
+    }
+
+    // ページ作成
+    const nameIdMap = {} as {[name: string]: string};
+    await Promise.all(nameList.map((name) => {
+        return notion.pages.create({
+            parent: {
+                database_id: process.env.MEMBER_DATABASE_ID,
+            },
+            properties: {
+                // @ts-ignore
+                'Name': {
+                    'title': [{
+                        type: 'text',
+                        text: {
+                            content: name,
+                        },
+                    }],
+                },
+            },
+        })
+        .then((result) => {
+            nameIdMap[name] = result.id;
+        });
+    }));
+
+    console.log('nameIDMap', nameIdMap);
+
+    // IDを割り当て
+    return updateInfo.map((temp) => {
+        const info = Object.assign({}, temp);
+        if (info.interviewee !== undefined && info.interviewee.id === undefined) {
+            info.interviewee.id = nameIdMap[info.interviewee.name];
+        }
+        info.interviewer.forEach((ivr) => {
+            if (ivr.id === undefined) {
+                ivr.id = nameIdMap[ivr.name];
+            }
+        });
+        return info;
+    });
 }
 
 async function updatePage(updateInfo: UpdateInfo[]) {
     Promise.all(updateInfo.map(async(info) => {
-        console.log('info', info);
+        const properties = {};
+        let flag = false;
         if (info.interviewee?.id !== undefined) {
-            console.log('update');
-            return await notion.pages.update({
+            properties['インタビュイー'] = {
+                'relation': [{
+                    id: info.interviewee.id,
+                }],
+            }
+            flag = true;
+        }
+        if (info.interviewer.length > 0) {
+            properties['インタビュアー'] = {
+                'relation': info.interviewer.map(i => { 
+                    return {
+                        id: i.id
+                    };
+                }),
+            }
+            flag = true;
+        }
+        if (flag) {
+            await notion.pages.update({
                 page_id: info.pageId,
-                properties: {
-                    // @ts-ignore
-                    'Property': {
-                        'rich_text': [{
-                            type: 'text',
-                            text: {
-                                content: 'Test2',
-                            },
-                        }],
-                    },
-                    'インタビュイー': {
-                        // @ts-ignore
-                        'relation': [{
-                            id: info.interviewee.id,
-                        }],
-                    },
-                },
+                // @ts-ignore
+                properties,
                 archived: false,
             });
-        } else {
-            return Promise.resolve();
         }
     }));
 
 }
 
 async function main() {
+    console.log('*** loadFellowList ***');
     const memberMap = await loadFellowList();
-    // console.log(memberMap);
+    console.log('*** getPageInfo ***');
     const updateInfo = await getPageInfo(memberMap);
-    // console.log(updateInfo);
-    await updatePage(updateInfo);
+    console.log('*** createMemberPage ***');
+    const newUpdateInfo = await createMemberPage(updateInfo);
+    console.log(newUpdateInfo);
+    console.log('*** updatePage ***');
+    await updatePage(newUpdateInfo);
 }
 main();
