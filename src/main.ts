@@ -356,5 +356,6 @@ async function setupYoutubeMain() {
     await insertYoutube(infos);
 
 }
-// main();
-setupYoutubeMain();
+main().then(() => {
+    setupYoutubeMain();
+});
